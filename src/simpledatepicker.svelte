@@ -1,12 +1,12 @@
 <script>
-    import { createEventDispatcher, tick  } from 'svelte';
+    import { onMount, createEventDispatcher, tick  } from 'svelte';
 
     export let date;
     export let options = {};
     export let open = false;
 
     const dispatch = createEventDispatcher();
-    let root;
+    let node;
     let mode = 0;
     let dates = [];
     let settings = {};
@@ -29,52 +29,117 @@
     }
 
     let defaults = {
+        trigger: '',                                // DOM element or selector of whatever triggered the picker
         min: '',                                    // Minimum date allowed to be picked. Empty = no limits
         max: '',                                    // Maximum date allowed to be picked. Empty = no limits
-        align: 'center',                            // Picker alignment relative to it's container
+        align: 'left',                              // Picker alignment relative to it's container
         lang: 'en',                                 // Can be a supported ISO code or an object with the translations
         format: ['D', 'M', 'Y'],                    // How date appears at the top bar and also how it is returned if string
         output: 'date',                             // Can be date=As date object, utc=As date.UTC object, a date format to return as string (eg. DD-MM-YYYY)
         showButtons: true,                          // Show the bottom command bar
         keyboard: false,                            // If true keyboard shortcuts are available
-        sundayFirst: true,                          // If true sunday is the first day of the week, otherwise it's last
-        yearRange: {                                // Range of years to browse in
-            start: new Date().getFullYear() - 80, 
-            end: new Date().getFullYear() + 20
-        }
+        sundayFirst: true                           // If true sunday is the first day of the week, otherwise it's last
     }
     let currTrans = null;                           // The translation applied
-    let workDate;                                   // Date to work on. It's the pre selected date
-    let initialDate;                                // The date initially passed to the picker                                      
+    let workDate;                                   // Date to work on. It's the pre selected date                                  
     let years = [];                                 // Years array to show the years pane
     let keysEventFlag = false;                      // Controls setting and unsetting keyboard events
     let weekDaysArr = [];                           // Array with the week days abbreviations
     let validYearMin = 0;                           // Control the valid years functionality
-    let validYearMax = Number.MAX_VALUE;            // Control the valid years functionality
-
-    $: if (open) { 
-        if (settings.keyboard && !keysEventFlag) { 
-            keysEventFlag = true;
-            document.addEventListener('keyup', keysEvent);
-        }
-        if (!workDate) {
-            let numYears = settings.yearRange.end - settings.yearRange.start + 1;
-
-            years = Array(numYears).fill(0).map((e, i) => { return { y: settings.yearRange.start + i, inrange: 0 }});
-            console.log(currTrans)
-            workDate = setWorkingDate(date || new Date()); 
-            initialDate = new Date(workDate.date);
-            renderMonth(workDate);
-        }            
-    } else {
-        if (settings.keyboard && keysEventFlag) { 
-            document.removeEventListener('keyup', keysEvent); 
-            keysEventFlag = false;
-        }
-        workDate = null;
-    }
+    let validYearMax = 0;                           // Control the valid years functionality
+    let validMonthMin = 0;                          // Control the valid months functionality
+    let validMonthMax = 0;                          // Control the valid months functionality    
+    let trigger = null;
 
     $: updateSettings(options);
+    $: checkIfOpen(open);
+
+    // Runs stuff at opening and closing of the picker
+    function checkIfOpen() {
+        if (open) { 
+            if (settings.trigger) { window.addEventListener('click', clickOutside); }
+
+            if (settings.keyboard && !keysEventFlag) { 
+                keysEventFlag = true;
+                document.addEventListener('keyup', keysEvent);
+            }
+            if (!workDate) { console.log(settings)
+                let numYears = (validYearMax - validYearMin) + 1;
+
+                years = Array(numYears).fill(0).map((e, i) => validYearMin + i);
+                workDate = setWorkingDate(date || new Date()); console.log(workDate)
+
+                // If today (or the chosen date) is not in range, point to the last possible day
+                if (settings.max && workDate.date.getTime() > settings.max.getTime() || settings.min && workDate.date.getTime() > settings.min.getTime()) {
+                    workDate = setWorkingDate(settings.max);
+                }
+
+                
+                renderMonth(workDate);
+            }     
+            
+            // Wait for the references to node to resolve
+            (async () => { 
+                await tick();
+                let bcr = trigger.getBoundingClientRect(); 
+                let compStyle = window.getComputedStyle(trigger);
+                let nodeCompStyle = window.getComputedStyle(node);
+                //let mrgsVert = Math.abs(parseInt(compStyle.getPropertyValue('margin-top')) - parseInt(compStyle.getPropertyValue('margin-bottom')));
+                let mrgsHorz = Math.abs(parseInt(compStyle.getPropertyValue('margin-left')) - parseInt(compStyle.getPropertyValue('margin-right')));
+                let nodeHeight = parseInt(nodeCompStyle.getPropertyValue('height')) + (parseInt(nodeCompStyle.getPropertyValue('border-width')) * 2) ;
+                let nodeWidth = parseInt(nodeCompStyle.getPropertyValue('width')) + (parseInt(nodeCompStyle.getPropertyValue('border-width')) * 2);
+                let align = settings.align;
+
+                if (!settings.align || settings.align == 'auto') {
+                    let wdt = document.documentElement.clientWidth;
+                    let hgt = document.documentElement.clientHeight; 
+                    let lft = bcr.left + nodeWidth < wdt;
+                    let rgt = bcr.right - nodeWidth > 0;
+                    let top = bcr.top - nodeHeight > 0;
+                    let btm = bcr.bottom + nodeHeight < hgt;
+
+                    if (lft && btm) { align = 'left'; } else if (rgt && btm) { align = 'right'; } else 
+                    if (lft && top) { align = 'topleft'; } else if (rgt && top) { align = 'topright'; }
+                }
+
+                switch(align) {
+                    case 'right':
+                        node.style.right = (trigger.offsetLeft + (+trigger.style.width) + mrgsHorz) + 'px'; 
+                        node.style.top = trigger.offsetTop + bcr.height + 1 + 'px';
+                        break;
+
+                    case 'topleft': 
+                        node.style.left = trigger.offsetLeft + 'px'; 
+                        node.style.top = (trigger.offsetTop - nodeHeight - 1) + 'px'; 
+                        break;
+
+                    case 'topright':
+                        node.style.right = (trigger.offsetLeft + (+trigger.style.width) + mrgsHorz) + 'px'; 
+                        node.style.top = (trigger.offsetTop - nodeHeight - 1) + 'px'; 
+                        break;    
+                        
+                    default: // Show left if all else fails
+                        node.style.left = trigger.offsetLeft + 'px'; 
+                        node.style.top = trigger.offsetTop + bcr.height + 1 + 'px';
+                        break;
+                }
+            })();
+        } else {
+            if (settings.trigger) {window.removeEventListener('click', clickOutside); }
+            if (settings.keyboard && keysEventFlag) { 
+                document.removeEventListener('keyup', keysEvent); 
+                keysEventFlag = false;
+            }
+            workDate = null;
+        }
+    }
+
+    onMount(() => {
+        if (settings.trigger) {
+            trigger = typeof settings.trigger == 'string' ? document.querySelector(settings.trigger) : settings.trigger;
+            console.log('left: ' + trigger.offsetLeft)
+        }
+    })
 
     function keysEvent(evt) {
         switch(evt.code) {
@@ -85,13 +150,16 @@
         }
     }
 
-    function updateSettings() {
+    async function updateSettings() { 
         settings = {...defaults, ...options};
 
         if (settings.min && typeof settings.min == 'string') { settings.min = toDate(settings.min); }
         if (settings.max && typeof settings.max == 'string') { settings.max = toDate(settings.max); }
-        if (settings.min) { validYearMin = settings.min.getFullYear(); }
-        if (settings.max) { validYearMax = settings.max.getFullYear(); }
+
+        validYearMin = settings.min ? settings.min.getFullYear() : new Date().getFullYear() - 40;
+        validYearMax = settings.max ? settings.max.getFullYear() : new Date().getFullYear() + 10;
+        validMonthMin = settings.min ? settings.min.getMonth() : 0;
+        validMonthMax = settings.max ? settings.max.getMonth() : 11;
 
         // If language is blank, set the default
         if (!settings.lang) { settings.lang = 'en'; }
@@ -112,21 +180,11 @@
         }
     }
 
-    function clickOutside(node) { 
-        window.addEventListener('click', handleClick);
-        
-        function handleClick(e) {
-            if (!node.contains(e.target)) {
-                e.preventDefault();
-                node.dispatchEvent(new CustomEvent('outclick'));
-            }
+    function clickOutside(evt) { console.log(node); console.log(evt.target)
+        if (!node.contains(evt.target) && !evt.target.isEqualNode(trigger)) {
+            evt.preventDefault(); console.log('11111')
+            cmds('back');
         }
-        return {
-            destroy() {
-                // the node has been removed from the DOM
-                window.removeEventListener('click', handleClick)
-            }
-        };
     } 
 
     // Sets a date to the working date object
@@ -194,11 +252,10 @@
     }
 
     // Responds for the arrows
-    function NavigateTo(direction) { //console.log(workDate)
-        let dt = addTo(workDate.date, direction, 'm'); //console.log(dt)
-        workDate = setWorkingDate(dt);console.log(workDate); console.log('--------------------------------')
+    function NavigateTo(direction) { 
+        let dt = addTo(workDate.date, direction, 'm'); 
+        workDate = setWorkingDate(dt);
         renderMonth(workDate);
-        //console.log(dates)
         mode = 0;
     }
 
@@ -231,12 +288,12 @@
     // inidate is the date at the box when it was clicked
     // inpFmt is the input format being used
     function renderMonth(wkdate) { 
-        let chosen = wkdate.date; //console.log('chosen', chosen)
+        let chosen = wkdate.date; 
         if (!chosen) { return []; }
 
         let counter = firstDayOfMonth(chosen);                      // Position passed date at first of month 
         let gday = counter.getDay();
-        let repos = settings.sundayFirst ? gday :  gday == 0 ? 6 : gday - 1;        console.log(counter.getDay(), repos)
+        let repos = settings.sundayFirst ? gday :  gday == 0 ? 6 : gday - 1;
         counter = addTo(counter, -repos, 'd');    // Position first of month date at last (previous) first day of week
         let m = chosen.getMonth();
         let lines = [];
@@ -266,7 +323,7 @@
         type == 'y' ? workDate.date.setFullYear(amount) : workDate.date.setMonth(amount);
         workDate = setWorkingDate(workDate.date);
         renderMonth(workDate);        
-        mode = 0;  console.log(this)
+        mode = 0;
     }
 
     // Completes a date selection and send it back to whoever called
@@ -301,8 +358,11 @@
         if (newmode == mode) { mode = 0; } else { mode = newmode; }
         if (mode == 2) { 
             await tick();
-            let el = root.querySelector('div.years > ol > li.selected');
+            let el = node.querySelector('div.years > ol > li.selected');
             el.scrollIntoView(); 
+        } else if (mode == 1) { 
+            currTrans.months = currTrans.months; 
+            console.log('OK MONTHS')
         }
     }
 
@@ -314,40 +374,41 @@
                 mode = 0;
                 break;
 
-            case 'inital':
-                workDate = setWorkingDate(initialDate);
-                renderMonth(workDate);
-                mode = 0;
-                break;
-
             case 'clear':
                 date = null;
-                initialDate = null;
                 workDate = null;
                 dates = [];
                 open = false;
                 break;
 
             case 'back':
-                initialDate = null;
                 workDate = null;
                 dates = [];                
                 open = false;                
         }
     }
+
+    function isMonthOk(mth) { 
+        if (workDate.year == validYearMax) { console.log('1111')
+            return mth <= validMonthMax;
+        } else if (workDate.year == validYearMin) { console.log('2222')
+            return mth >= validMonthMin;
+        } else { console.log('3333'); return true; }
+    }
 </script>
 
+<slot />
 {#if open && workDate}
-    <section bind:this={root} class="{settings.align}" use:clickOutside on:outclick={cmds.bind(this, 'back')}>
+    <section bind:this={node}>
         <div>
-            <b class="chevron left" on:click={NavigateTo.bind(this, -1)}></b>
+            <b class="chevron left" class:disabled={workDate.year == validYearMin && workDate.indexMonth == validMonthMin} on:click={NavigateTo.bind(this, -1)}></b>
             <span>
                 <span on:click={switchMode.bind(this, 0)}>{workDate.day}</span>
                 <span on:click={switchMode.bind(this, 1)}>{workDate.monthstr}</span>
-                <span on:click={switchMode.bind(this, 2)}>{workDate.year}</span>
+                <span on:click={switchMode.bind(this, 2)} class:stop={years.length == 1}>{workDate.year}</span>
             </span>
 
-            <b class="chevron right" on:click={NavigateTo.bind(this, 1)}></b>
+            <b class="chevron right" class:disabled={workDate.year == validYearMax && workDate.indexMonth == validMonthMax} on:click={NavigateTo.bind(this, 1)}></b>
         </div>
         <aside>
             <div>
@@ -366,28 +427,25 @@
                     {/each}
                 </ul>
             </div>
-            {#if mode == 1}
-                <div class="months">
-                    <ol>
-                        {#each currTrans.months as month, ind}
-                            <!-- svelte-ignore a11y-click-events-have-key-events -->
-                            <li on:click={choose.bind(this, ind, 'm')} class:selected={workDate.indexMonth == ind}>{month}</li>
-                        {/each}
-                    </ol>
-                </div>
-            {:else if mode == 2}
-                <div class="years">
-                    <ol>
-                        {#each years as year}
-                            <!-- svelte-ignore a11y-click-events-have-key-events -->
-                            <li class:selected={workDate.year == year.y} on:click={choose.bind(this, year.y, 'y')} 
-                                class:valid={validYearMin > 0 && validYearMax < Number.MAX_VALUE && year.y >= validYearMin && year.y <= validYearMax}>
-                                {year.y}
-                            </li>
-                        {/each}
-                    </ol>
-                </div>
-            {/if}            
+
+            <div class="months" class:hide={mode != 1}>
+                <ol>
+                    {#each currTrans.months as month, ind}
+                        <!-- svelte-ignore a11y-click-events-have-key-events -->
+                        <li on:click={choose.bind(this, ind, 'm')} class:disabled={!isMonthOk(ind, month)} class:selected={workDate.indexMonth == ind}>{month}</li>
+                    {/each}
+                </ol>
+            </div>
+
+            <div class="years" class:hide={mode != 2}>
+                <ol>
+                    {#each years as year}
+                        <!-- svelte-ignore a11y-click-events-have-key-events -->
+                        <li class:selected={workDate.year == year} on:click={choose.bind(this, year, 'y')}>{year}</li>
+                    {/each}
+                </ol>
+            </div>
+                
         </aside>
         {#if settings.showButtons}
             <footer>
@@ -406,17 +464,24 @@
     section.left    { margin: 0 0 auto; }
     section.right   { margin: 0 0 0 auto; }
 
+    .stop {
+        pointer-events: none;
+        cursor: default;
+    }
+
+    .hide { display: none; }
+
     footer {
         display: flex;
         justify-content: space-between;
         padding: 0;
-        border-top: 1px solid #eee;
+        border-top: 1px solid var(--int-bordercolor);
         text-transform: uppercase;
         font-size: 10px;
         letter-spacing: 0.5px;
         font-weight: 600;
         user-select: none;
-        color: dodgerblue;
+        color: var(--int-barbkg);
     }
 
     footer > span {
@@ -426,7 +491,7 @@
     }
 
     footer > span:hover {
-        background-color: dodgerblue;
+        background-color: var(--int-barbkg);
         color: #fff;
     }    
 
@@ -486,15 +551,15 @@
 
     .disabled {
         pointer-events: none;
-        color: var(--color-off, #eee);
+        color: var(--int-disabled);
         border-color: transparent;
     }
 
-    .outofmonth { color: var(--color-off, #eee); }
+    .outofmonth { color: var(--int-disabled); }
 
     .today {
-        border: 1px solid dodgerblue;
-        box-shadow: inset 0 0 1px 1px dodgerblue;
+        border: 1px solid var(--int-barbkg);
+        box-shadow: inset 0 0 1px 1px var(--int-barbkg);
     }
 
     .selected {
@@ -505,6 +570,7 @@
     section * { box-sizing: border-box; }
 
     section {
+        position: absolute;
         display: flex;
         background-color: var(--int-background);
         font-size: var(--int-fontsize);
@@ -517,7 +583,7 @@
         --int-background: var(--background, #fff);
         --int-color: var(--color, #888);
         --int-disabled: var(--disabled, #eee);
-        --int-barbkg: var(--barbkg, dodgerblue);
+        --int-barbkg: var(--barbkg, tomato);
         --int-barcolor: var(--barcolor, #fff);
         --int-bordercolor: var(--bordercolor, #eee);
         --int-selectedbkg: var(--selectedbkg, crimson);
@@ -535,8 +601,6 @@
         padding: 10px;
     }
 
-    section > div:first-child * { cursor: pointer; }
-
     section > div:last-child {
         background-color: #fff;
         color: #777;
@@ -544,27 +608,21 @@
         padding: 5px;
     }    
 
-/*     section > div:first-child > div {
-        font-weight: 700;
-        padding: 10px 12px;
+    section > div:first-child > b {
+        cursor: pointer;
+        margin-bottom: -5px;
     }
 
-    section > div:first-child > div > div:first-child {
-        font-size: 30px;
-    } */
-
+    section > div:first-child > span > span  { cursor: pointer; }
     section > div:first-child                { text-transform: uppercase; }
-    section > div:first-child > b            { margin-bottom: -5px; }
     section > div:first-child > b:last-child { margin-right: 2px; }
 
-/*     section > div:first-child > div > div:last-child {
-        font-size: 110%;
-    }    */ 
 
     ul {
         padding: 0;
         margin: 0;
         list-style: none;
+        white-space: nowrap;
     }
 
     ul > li {
@@ -601,11 +659,6 @@
     .chevron.right:before {
         left: 0;
         transform: rotate(45deg);
-    }
-
-    .chevron.bottom:before {
-        top: 0;
-        transform: rotate(135deg);
     }
 
     .chevron.left:before {
